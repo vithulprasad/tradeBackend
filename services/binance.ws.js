@@ -127,7 +127,7 @@ const connectBinance = (io) => {
   if (binanceWS) return; // 🔥 prevent multiple connections
 
   binanceWS = new WebSocket(
-    "wss://stream.binance.com:9443/ws/btcusdt@kline_1m" // Changed to 1m for better indicator performance
+    "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=1" // Changed to 1m for better indicator performance
   );
 
   binanceWS.on("open", () => {
