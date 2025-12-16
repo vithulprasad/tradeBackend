@@ -1,10 +1,10 @@
-const WebSocket = require("ws");
+const axios = require('axios');
 const CISDIndicator = require('../services/Indicator');
-const Trade = require('../models/Trade'); // Import Trade model
+const Trade = require('../models/Trade');
 
 // Store historical OHLC data for indicator calculation
 const ohlcBuffer = [];
-const MAX_BUFFER_SIZE = 500; // Keep last 500 candles
+const MAX_BUFFER_SIZE = 500;
 
 // Store active trades for monitoring
 const activeTrades = new Map();
@@ -17,7 +17,12 @@ const indicator = new CISDIndicator({
     liquidityLookback: 10
 });
 
-let binanceWS = null;
+let pollingInterval = null;
+
+let lastCandleTime = null;
+
+// Binance REST API endpoint
+const BINANCE_API = "https://api.binance.com/api/v3/klines";
 
 // Helper function to create a trade
 const createTrade = async (signal, price, symbol) => {
@@ -25,14 +30,14 @@ const createTrade = async (signal, price, symbol) => {
     const direction = signal.bullishSweep ? 'BUY' : 'SELL';
     const entryPrice = price;
     const stopLoss = direction === 'BUY' 
-      ? entryPrice * (1 - 0.008)  // 0.8% below for buy
-      : entryPrice * (1 + 0.008); // 0.8% above for sell
+      ? entryPrice * (1 - 0.008)
+      : entryPrice * (1 + 0.008);
     
     const target = direction === 'BUY'
-      ? entryPrice * (1 + 0.012)  // 1.2% above for buy
-      : entryPrice * (1 - 0.012); // 1.2% below for sell
+      ? entryPrice * (1 + 0.012)
+      : entryPrice * (1 - 0.012);
     
-    const tradedQuantity = 50; // 50% quantity
+    const tradedQuantity = 50;
 
     const trade = new Trade({
       name: `${symbol} ${direction} Signal`,
@@ -49,8 +54,6 @@ const createTrade = async (signal, price, symbol) => {
     });
 
     await trade.save();
-    
-    // Store in active trades map for monitoring
     activeTrades.set(trade._id.toString(), trade);
     
     console.log(`✅ Trade Created: ${direction} ${symbol} at ${entryPrice.toFixed(2)}`);
@@ -72,14 +75,12 @@ const checkActiveTrades = async (currentPrice) => {
       let tradeResult = 'OPEN';
 
       if (trade.direction === 'BUY') {
-        // Check if target hit (price went up)
         if (currentPrice >= trade.target) {
           shouldUpdate = true;
           newStatus = 'COMPLETED';
           tradeResult = 'WINNER';
           console.log(`🎯 Target Hit! Trade #${tradeId} - WINNER`);
         }
-        // Check if stop loss hit (price went down)
         else if (currentPrice <= trade.stopLoss) {
           shouldUpdate = true;
           newStatus = 'COMPLETED';
@@ -87,14 +88,12 @@ const checkActiveTrades = async (currentPrice) => {
           console.log(`🛑 Stop Loss Hit! Trade #${tradeId} - LOSER`);
         }
       } else if (trade.direction === 'SELL') {
-        // Check if target hit (price went down)
         if (currentPrice <= trade.target) {
           shouldUpdate = true;
           newStatus = 'COMPLETED';
           tradeResult = 'WINNER';
           console.log(`🎯 Target Hit! Trade #${tradeId} - WINNER`);
         }
-        // Check if stop loss hit (price went up)
         else if (currentPrice >= trade.stopLoss) {
           shouldUpdate = true;
           newStatus = 'COMPLETED';
@@ -114,7 +113,6 @@ const checkActiveTrades = async (currentPrice) => {
             : ((trade.entryPrice - currentPrice) / trade.entryPrice) * 100
         });
         
-        // Remove from active trades
         activeTrades.delete(tradeId);
       }
     } catch (error) {
@@ -123,147 +121,176 @@ const checkActiveTrades = async (currentPrice) => {
   }
 };
 
-const connectBinance = (io) => {
-  if (binanceWS) return; // 🔥 prevent multiple connections
+// Fetch Binance data via REST API
+const fetchBinanceData = async (io) => {
+  try {
+    const response = await axios.get(BINANCE_API, {
+      params: {
+        symbol: 'BTCUSDT',
+        interval: '1s',
+        limit: 2 // Get last 2 candles to ensure we have closed candle
+      },
+      timeout: 10000 // 10 second timeout
+    });
 
-  binanceWS = new WebSocket(
-    "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=1" // Changed to 1m for better indicator performance
-  );
-
-  binanceWS.on("open", () => {
-    console.log("✅ Connected to Binance WS");
-  });
-
-  binanceWS.on("message", async(data) => {
-    try {
-      const message = JSON.parse(data);
-      const kline = message.k;
-
-      // Build OHLC object for indicator
-      const ohlcCandle = {
-        timestamp: kline.t,
-        open: parseFloat(kline.o),
-        high: parseFloat(kline.h),
-        low: parseFloat(kline.l),
-        close: parseFloat(kline.c),
-      };
-
-      // Only process closed candles for indicator calculation
-      if (kline.x) { // isClosed
-        // Add to buffer
-        ohlcBuffer.push(ohlcCandle);
-        
-        // Maintain buffer size
-        if (ohlcBuffer.length > MAX_BUFFER_SIZE) {
-          ohlcBuffer.shift();
-        }
-
-        // Calculate indicator signals if we have enough data
-        let indicatorSignal = null;
-        if (ohlcBuffer.length >= indicator.len * 2 + 10) { // Need enough data for pivot detection
-          const results = indicator.calculate(ohlcBuffer);
-          const latestResult = results[results.length - 1];
-          
-          // Check for signals
-          if (latestResult.cisd !== 0 || latestResult.bearishSweep || latestResult.bullishSweep) {
-            indicatorSignal = {
-              cisd: latestResult.cisd,
-              cisdLevel: latestResult.cisdLevel,
-              trend: latestResult.trend,
-              bearishSweep: latestResult.bearishSweep,
-              bullishSweep: latestResult.bullishSweep,
-              swingHigh: latestResult.swingHigh,
-              swingLow: latestResult.swingLow
-            };
-            
-            // Console log based on signal type and create trade
-            if (latestResult.bullishSweep) {
-              console.log('🟢 STRONG BULLISH SIGNAL - Bullish CISD with Liquidity Sweep!');
-              console.log(`   Price: ${ohlcCandle.close.toFixed(2)} | Level: ${latestResult.cisdLevel?.toFixed(2)}`);
-              
-              // Create BUY trade
-              await createTrade(
-                { bullishSweep: true, bearishSweep: false },
-                ohlcCandle.close,
-                kline.s
-              );
-            } else if (latestResult.bearishSweep) {
-              console.log('🔴 STRONG SELL SIGNAL - Bearish CISD with Liquidity Sweep!');
-              console.log(`   Price: ${ohlcCandle.close.toFixed(2)} | Level: ${latestResult.cisdLevel?.toFixed(2)}`);
-              
-              // Create SELL trade
-              await createTrade(
-                { bullishSweep: false, bearishSweep: true },
-                ohlcCandle.close,
-                kline.s
-              );
-            } else if (latestResult.cisd === 1) {
-              console.log('🟢 Bullish CISD detected at', latestResult.cisdLevel?.toFixed(2));
-            } else if (latestResult.cisd === -1) {
-              console.log('🔴 Bearish CISD detected at', latestResult.cisdLevel?.toFixed(2));
-            }
-          }
-        }
-
-        const payload = {
-          symbol: kline.s,
-          open: parseFloat(kline.o),
-          high: parseFloat(kline.h),
-          low: parseFloat(kline.l),
-          close: parseFloat(kline.c),
-          volume: parseFloat(kline.v),
-          isClosed: kline.x,
-          time: kline.t,
-          indicator: indicatorSignal, // Include indicator signals
-          bufferSize: ohlcBuffer.length // For debugging
-        };
-
-        // 🔥 Emit to ALL socket.io clients
-        io.emit("binance_kline", payload);
-        
-        // Emit separate event for signals
-        if (indicatorSignal) {
-          io.emit("cisd_signal", {
-            ...payload,
-            signal: indicatorSignal
-          });
-        }
-      } else {
-        // For real-time updates (non-closed candles), still emit without indicator
-        // Also check active trades with current price
-        await checkActiveTrades(parseFloat(kline.c));
-        
-        const payload = {
-          symbol: kline.s,
-          open: parseFloat(kline.o),
-          high: parseFloat(kline.h),
-          low: parseFloat(kline.l),
-          close: parseFloat(kline.c),
-          volume: parseFloat(kline.v),
-          isClosed: kline.x,
-          time: kline.t,
-          indicator: null,
-          bufferSize: ohlcBuffer.length,
-          activeTrades: activeTrades.size
-        };
-        
-        io.emit("binance_kline", payload);
-      }
-
-    } catch (error) {
-      console.error("Error processing Binance message:", error.message);
+    if (!response.data || response.data.length === 0) {
+      console.error('No data received from Binance');
+      return;
     }
-  });
 
-  binanceWS.on("close", () => {
-    console.log("❌ Binance WS closed. Reconnecting...");
-    binanceWS = null;
-    setTimeout(() => connectBinance(io), 3000);
-  });
+    // Get the latest closed candle (second-to-last if current is still open)
+    const klineData = response.data[0];
+    const currentKline = response.data[1]; // Current candle for real-time price
+    
+    const candleCloseTime = klineData[6]; // Close time
+    
+    // Only process if this is a new candle (avoid duplicates)
+    if (lastCandleTime === candleCloseTime) {
+      // Update current price for active trades monitoring
+      const currentPrice = parseFloat(currentKline[4]);
+      await checkActiveTrades(currentPrice);
+      
+      // Emit real-time update
+      io.emit("binance_kline", {
+        symbol: 'BTCUSDT',
+        open: parseFloat(currentKline[1]),
+        high: parseFloat(currentKline[2]),
+        low: parseFloat(currentKline[3]),
+        close: currentPrice,
+        volume: parseFloat(currentKline[5]),
+        isClosed: false,
+        time: currentKline[0],
+        indicator: null,
+        bufferSize: ohlcBuffer.length,
+        activeTrades: activeTrades.size
+      });
+      return;
+    }
+    
+    lastCandleTime = candleCloseTime;
 
-  binanceWS.on("error", (err) => {
-    console.error("Binance WS error:", err.message);
-  });
+    const ohlcCandle = {
+      timestamp: klineData[0],
+      open: parseFloat(klineData[1]),
+      high: parseFloat(klineData[2]),
+      low: parseFloat(klineData[3]),
+      close: parseFloat(klineData[4]),
+      volume: parseFloat(klineData[5])
+    };
+
+    // Add to buffer
+    ohlcBuffer.push(ohlcCandle);
+    
+    if (ohlcBuffer.length > MAX_BUFFER_SIZE) {
+      ohlcBuffer.shift();
+    }
+
+    console.log(`📊 New Candle: ${ohlcCandle.close.toFixed(2)} | Buffer: ${ohlcBuffer.length}/${MAX_BUFFER_SIZE}`);
+
+    // Calculate indicator signals
+    let indicatorSignal = null;
+    if (ohlcBuffer.length >= indicator.len * 2 + 10) {
+      const results = indicator.calculate(ohlcBuffer);
+      const latestResult = results[results.length - 1];
+      
+      if (latestResult.cisd !== 0 || latestResult.bearishSweep || latestResult.bullishSweep) {
+        indicatorSignal = {
+          cisd: latestResult.cisd,
+          cisdLevel: latestResult.cisdLevel,
+          trend: latestResult.trend,
+          bearishSweep: latestResult.bearishSweep,
+          bullishSweep: latestResult.bullishSweep,
+          swingHigh: latestResult.swingHigh,
+          swingLow: latestResult.swingLow
+        };
+        
+        if (latestResult.bullishSweep) {
+          console.log('🟢 STRONG BULLISH SIGNAL - Bullish CISD with Liquidity Sweep!');
+          console.log(`   Price: ${ohlcCandle.close.toFixed(2)} | Level: ${latestResult.cisdLevel?.toFixed(2)}`);
+          
+          await createTrade(
+            { bullishSweep: true, bearishSweep: false },
+            ohlcCandle.close,
+            'BTCUSDT'
+          );
+        } else if (latestResult.bearishSweep) {
+          console.log('🔴 STRONG SELL SIGNAL - Bearish CISD with Liquidity Sweep!');
+          console.log(`   Price: ${ohlcCandle.close.toFixed(2)} | Level: ${latestResult.cisdLevel?.toFixed(2)}`);
+          
+          await createTrade(
+            { bullishSweep: false, bearishSweep: true },
+            ohlcCandle.close,
+            'BTCUSDT'
+          );
+        } else if (latestResult.cisd === 1) {
+          console.log('🟢 Bullish CISD detected at', latestResult.cisdLevel?.toFixed(2));
+        } else if (latestResult.cisd === -1) {
+          console.log('🔴 Bearish CISD detected at', latestResult.cisdLevel?.toFixed(2));
+        }
+      }
+    }
+
+    // Check active trades with closed candle price
+    await checkActiveTrades(ohlcCandle.close);
+
+    const payload = {
+      symbol: 'BTCUSDT',
+      open: ohlcCandle.open,
+      high: ohlcCandle.high,
+      low: ohlcCandle.low,
+      close: ohlcCandle.close,
+      volume: ohlcCandle.volume,
+      isClosed: true,
+      time: ohlcCandle.timestamp,
+      indicator: indicatorSignal,
+      bufferSize: ohlcBuffer.length,
+      activeTrades: activeTrades.size
+    };
+
+    io.emit("binance_kline", payload);
+    
+    if (indicatorSignal) {
+      io.emit("cisd_signal", {
+        ...payload,
+        signal: indicatorSignal
+      });
+    }
+
+  } catch (error) {
+    if (error.code === 'ECONNABORTED') {
+      console.error("⏱️ Binance API request timeout");
+    } else if (error.response) {
+      console.error(`❌ Binance API error: ${error.response.status} - ${error.response.statusText}`);
+    } else {
+      console.error("❌ Error fetching Binance data:", error.message);
+    }
+  }
+};
+
+const connectBinance = (io) => {
+  if (pollingInterval) {
+    console.log("⚠️ Binance polling already running");
+    return;
+  }
+
+  console.log("✅ Starting Binance REST API polling (1-minute intervals)");
+  
+  // Fetch immediately on start
+  fetchBinanceData(io);
+  
+  // Poll every 5 seconds to catch new candles quickly and update active trades
+  pollingInterval = setInterval(() => {
+    fetchBinanceData(io);
+  }, 2000); // Check every 5 seconds for new candles
+};
+
+// Stop polling (useful for cleanup)
+const disconnectBinance = () => {
+  if (pollingInterval) {
+    clearInterval(pollingInterval);
+    pollingInterval = null;
+    console.log("❌ Binance polling stopped");
+  }
 };
 
 // Helper function to get current buffer status
@@ -273,11 +300,13 @@ const getBufferStatus = () => {
     minRequired: indicator.len * 2 + 10,
     ready: ohlcBuffer.length >= indicator.len * 2 + 10,
     firstCandle: ohlcBuffer[0]?.timestamp || null,
-    lastCandle: ohlcBuffer[ohlcBuffer.length - 1]?.timestamp || null
+    lastCandle: ohlcBuffer[ohlcBuffer.length - 1]?.timestamp || null,
+    lastCandleTime: lastCandleTime,
+    isPolling: pollingInterval !== null
   };
 };
 
-// Helper function to manually trigger calculation (useful for testing)
+// Helper function to manually trigger calculation
 const calculateIndicator = () => {
   if (ohlcBuffer.length < indicator.len * 2 + 10) {
     return { error: 'Not enough data', bufferStatus: getBufferStatus() };
@@ -288,11 +317,12 @@ const calculateIndicator = () => {
 };
 
 module.exports = { 
-  connectBinance, 
+  connectBinance,
+  disconnectBinance,
   getBufferStatus, 
   calculateIndicator,
-  ohlcBuffer, // Export for external access if needed
-  activeTrades, // Export active trades
-  createTrade, // Export trade creation function
-  checkActiveTrades // Export trade checking function
+  ohlcBuffer,
+  activeTrades,
+  createTrade,
+  checkActiveTrades
 };

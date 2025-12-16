@@ -4,9 +4,10 @@ const http = require("http");
 const mongoose = require('mongoose');
 const { initSocket } = require("./socket");
 require('dotenv').config();
-
+const axios = require('axios');
 const app = express();
 const server = http.createServer(app);
+const { connectBinance, getBufferStatus, activeTrades } = require('./services/binance.ws');
 
 // It's highly recommended to use environment variables for sensitive data like your database connection string.
 const MONGODB_URL = process.env.MONGODB_URL // ← put your real URL here
@@ -18,10 +19,53 @@ mongoose.connect(MONGODB_URL)
 
 initSocket(server);
 
-server.listen(5000, () => {
-  console.log("Server running on port 5000");
+
+app.get('/health', (req, res) => {
+  const bufferStatus = getBufferStatus();
+  res.status(200).json({ 
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    uptime: Math.floor(process.uptime()),
+    memory: process.memoryUsage(),
+    bufferSize: bufferStatus.size,
+    bufferReady: bufferStatus.ready,
+    activeTrades: activeTrades.size,
+    isPolling: bufferStatus.isPolling
+  });
 });
 
+const RENDER_URL = process.env.RENDER_EXTERNAL_URL;
+const PING_INTERVAL = 3 * 60 * 1000; // 3 minutes
+
+const selfPing = async () => {
+  try {
+    const response = await axios.get(`${RENDER_URL}/health`, {
+      timeout: 5000
+    });
+    console.log(`⏰ Keep-alive ping: ${response.data.status} | Uptime: ${response.data.uptime}s | Active Trades: ${response.data.activeTrades}`);
+  } catch (error) {
+    console.error('⏰ Keep-alive ping failed:', error.message);
+  }
+};
+const startKeepAlive = () => {
+  // Run in both development and production (useful for testing)
+  if (RENDER_URL) {
+    console.log(`✅ Keep-alive enabled: pinging ${RENDER_URL} every 3 minutes`);
+    
+    // First ping after 1 minute (let server fully start)
+    setTimeout(selfPing, 1 * 60 * 1000);
+    
+    // Then ping every 3 minutes
+    setInterval(selfPing, PING_INTERVAL);
+  } else {
+    console.log('ℹ️  Keep-alive disabled (RENDER_EXTERNAL_URL not set)');
+    console.log('ℹ️  Set RENDER_EXTERNAL_URL=https://your-app.onrender.com in environment variables');
+  }
+};
+server.listen(5000, () => {
+  startKeepAlive()
+  console.log("Server running on port 5000");
+});
 
 
 
