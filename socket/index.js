@@ -41,7 +41,10 @@ async function broadcastTradeDetails(io, socket = null) {
     const losingTrades = await Trade.countDocuments({ tradeStatus: 'LOSER' });
     const winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0;
     const totalLose = totalTrades > 0 ? (losingTrades / totalTrades) * 100 : 0;
-    const pending_orders = await Trade.findOne({ currentStatus: 'OPEN' }).select("entryPrice exitPrice direction stopLoss target currentStatus tradeStatus signalType entryTime")
+const pending_orders = await Trade
+  .findOne({ tradeStatus: 'OPEN' })
+  .select("entryPrice exitPrice direction stopLoss target currentStatus tradeStatus signalType entryTime")
+  .lean();
     const most_buy_direction = await Trade.countDocuments({ direction: 'BUY' });
     const most_sell_direction = await Trade.countDocuments({ direction: 'SELL' });
 
