@@ -1,12 +1,15 @@
 const express = require("express");
 const http = require("http");
 const mongoose = require('mongoose');
-const { initSocket } = require("./socket");
+const { initSocket , getTradeDetails} = require("./socket");
 require('dotenv').config();
 const axios = require('axios');
 const app = express();
 const server = http.createServer(app);
 const { connectBinance, getBufferStatus, activeTrades } = require('./services/binance.ws');
+const cors = require('cors');
+const SignalDb = require('./models/Signal')
+app.use(cors());
 
 // MongoDB connection
 const MONGODB_URL = process.env.MONGODB_URL;
@@ -31,6 +34,83 @@ app.get('/health', (req, res) => {
     isPolling: bufferStatus.isPolling
   });
 });
+
+app.get('/broadcastTradeDetails',async(req,res)=>{
+  try {
+     const response = await getTradeDetails()
+     res.json({success:true,message:response})
+  } catch (error) {
+    res.json({success:false,message:error.message})
+  }
+})
+
+
+
+app.get("/get_signal_details", async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 10,
+      direction,
+      startDate,
+      endDate,
+    } = req.query;
+
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    /* -------------------- FILTER OBJECT -------------------- */
+    const filter = {};
+
+    // BUY / SELL filter
+    if (direction) {
+      filter.direction = direction.toUpperCase();
+    }
+
+    // Date range filter
+    if (startDate || endDate) {
+      filter.signalTime = {};
+
+      if (startDate) {
+        filter.signalTime.$gte = new Date(startDate);
+      }
+
+      if (endDate) {
+        filter.signalTime.$lte = new Date(endDate);
+      }
+    }
+
+    /* -------------------- QUERY -------------------- */
+    const [signals, totalCount] = await Promise.all([
+      Signal.find(filter)
+        .sort({ signalTime: -1 }) // 🔥 latest first
+        .skip(skip)
+        .limit(limitNum),
+
+      Signal.countDocuments(filter),
+    ]);
+
+    res.json({
+      success: true,
+      data: signals,
+      pagination: {
+        totalRecords: totalCount,
+        totalPages: Math.ceil(totalCount / limitNum),
+        currentPage: pageNum,
+        limit: limitNum,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
+
+
 
 const RENDER_URL = process.env.RENDER_EXTERNAL_URL;
 const PING_INTERVAL = 3 * 60 * 1000; // 3 minutes
@@ -241,10 +321,16 @@ const gracefulShutdown = (signal) => {
   
   server.close(() => {
     console.log('🛑 Server closed');
-    mongoose.connection.close(false, () => {
-      console.log('🛑 MongoDB connection closed');
-      process.exit(0);
-    });
+   mongoose.connection.close()
+  .then(() => {
+    console.log('MongoDB disconnected');
+    process.exit(0);
+  })
+  .catch(err => {
+    console.error('Error closing DB:', err);
+    process.exit(1);
+  });
+
   });
   
   // Force exit after 10 seconds
