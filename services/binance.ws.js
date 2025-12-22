@@ -126,8 +126,8 @@ let lastSavedOpenTime = null;
 
 const connectBinance = async () => {
   console.log('entering to fetch----------------------------------------')
-  const res = await fetch("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=1");
-const data = await res.json();
+  const res = await fetch("https://public.coindcx.com/market_data/candles?pair=B-BTC_USDT&interval=1m");
+  const data = await res.json();
 console.log(data,'--------------------------------')   
 // Extract OHLC
 const [open, high, low, close] = [data[0][1], data[0][2], data[0][3], data[0][4]];
