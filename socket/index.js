@@ -35,7 +35,7 @@ const initSocket = (httpServer) => {
   // 🔁 Binance live price broadcast (separate loop)
 setInterval(() => {
   connectBinance(io);
-}, 60 * 1000); // 1 minute
+},2000); // 1 minute
 
 
   return io;
