@@ -66,6 +66,7 @@ const connectBinance = async () => {
 
     if (signal === "NEUTRAL" && !last.cisd) {
       console.log("⚪ No valid signal – skipped");
+      return;
     }
 
     const savedSignal = await SignalModel.create({
@@ -88,6 +89,7 @@ const connectBinance = async () => {
     console.error("❌ connectBinance error:", err.message);
   }
 };
+
 
 const getBufferStatus = () => {
   return {
