@@ -2,198 +2,99 @@
 const axios = require('axios');
 const CISDIndicator =require('./Indicator.js')
 const SignalModel = require('../models/Signal');
-const CandleModel = require('../models/Candle.js')
-const {upsertCandle,mapCandle,trimOldCandles} = require('./tradeHelper.js')
-// Store historical OHLC data for indicator calculation
 const ohlcBuffer = [];
-const MAX_BUFFER_SIZE = 500;
 
-// Store active trades for monitoring
 const activeTrades = new Map();
 
-// Initialize indicator
 const Indicator = new CISDIndicator({
   tolerance: 0.65,
-  swingPeriod: 6,       // faster structure
-  expiryBars: 50,       // only recent liquidity
-  liquidityLookback: 5 // recent sweep only
+  swingPeriod: 6,       
+  expiryBars: 50,       
+  liquidityLookback: 5 
 });
 
 let pollingInterval = null;
 let lastCandleTime = null;
 
-const find_trade_details = async()=>{
-
-   const candles = await CandleModel
-  .find({ symbol: "BTCUSDT", timeframe: "1m" })
-  .sort({ openTime: 1 })     // IMPORTANT: oldest → newest
-  .limit(50);
-const ohlcData = candles.map(c => ({
-  timestamp: c.openTime,
-  open: c.open,
-  high: c.high,
-  low: c.low,
-  close: c.close
-}));
-const results = Indicator.calculate(ohlcData);
-
-// Last candle = current signal
-const last = results[results.length - 1];
-
-if (last.bullishSweep) {
-  console.log("🟢 STRONG BUY SETUP");
-}
-
-if (last.bearishSweep) {
-  console.log("🔴 STRONG SELL SETUP");
-}
-
-if (last.cisd === 1) {
-  console.log("Bullish CISD detected at", last.cisdLevel);
-}
-
-if (last.cisd === -1) {
-  console.log("Bearish CISD detected at", last.cisdLevel);
-}
-
-
-}
-// Fetch from Binance.US API
-const fetchFromBinanceUS = async () => {
-  const response = await axios.get("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=1", {
-    params: {
-      symbol: 'BTCUSDT',
-      interval: '1m',
-      limit: 2
-    },
-    timeout: 10000
-  });
-
-  return {
-    closed: response.data[0],
-    current: response.data[1]
-  };
-};
-
-
-async function analyzeMarket() {
-    try {
-        const signal = await find_trade_details();
-        console.log(signal,'working-----')
-
-        // if(signal.signal != "NEUTRAL"){
-        //     const details = {
-        //       signal: signal.signal,
-        //       strength: signal.strength,
-        //       confidence: signal.confidence,
-        //       price: signal.price,
-        //       signalTime: new Date(),
-        //       cisd: signal.details.cisd,
-        //       cisdLevel: signal.details.cisdLevel,
-        //       trend: signal.details.trend,
-        //       bullishSweep: signal.details.bullishSweep,
-        //       bearishSweep: signal.details.bearishSweep,
-        //       swingHigh: signal.details.swingHigh,
-        //       swingLow: signal.details.swingLow    
-        //     }
-
-        //   await SignalModel.updateOne(
-        //     { price: signal.price, signal: signal.signal },
-        //     { $setOnInsert: details },
-        //     { upsert: true }
-        //   );
-        // }
-        
-    } catch (error) {
-        console.error('❌ Analysis error:', error.message);
-    }
-}
-
-async function getActiveAPI() {
-  const requests = [
-    fetchFromBinanceUS(),
-    fetchFromCryptoCompare(),
-    fetchFromCoinGecko()
-  ];
-
-  // Returns FIRST successful response, ignores failures
-  return Promise.any(requests);
-}
-
-let lastSavedOpenTime = null;
-
-
 
 const connectBinance = async () => {
-  console.log('entering to fetch----------------------------------------')
-  const res = await fetch("https://public.coindcx.com/market_data/candles?pair=B-BTC_USDT&interval=1m");
-  const data = await res.json();
-console.log(data,'--------------------------------')   
-// Extract OHLC
-const [open, high, low, close] = [data[0][1], data[0][2], data[0][3], data[0][4]];
-// Save or emit webhook
-console.log(open,":open", high,":high", low,":low", close,":close" )
-}
+  try {
+    const res = await fetch(
+      "https://min-api.cryptocompare.com/data/v2/histominute?fsym=BTC&tsym=USD&limit=30",
+      {
+        headers: {
+          authorization:
+            "Apikey 952315b18589dc2819e120faa9cea1159fb5b874ca625c2341d8f093531d8f1e"
+        }
+      }
+    );
 
-// const connectBinance = async () => {
-//   const { closed, current } = await fetchFromBinanceUS();
-   
-  
-//   if (closed[0] === lastSavedOpenTime) return;
+    const json = await res.json();
+    const candles = json?.Data?.Data || [];
 
+    if (!candles.length) {
+      console.log("❌ No candle data received");
+      return;
+    }
 
-//   const open_de = {
-//     open: +closed[1],
-//     high: +closed[2],
-//     low: +closed[3],
-//     close: +closed[4],
-//   }
+    // 🔹 Map OHLC
+    const ohlcData = candles.map(c => ({
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close
+    }));
 
-//   const close_de = {
-//     open: +current[1],
-//     high: +current[2],
-//     low: +current[3],
-//     close: +current[4],
-//   }
+    // ✅ MOST RECENT CANDLE
+    const latest = ohlcData[ohlcData.length - 1];
 
+    console.log("📊 Latest Candle:");
+    console.log("Open :", latest.open);
+    console.log("High :", latest.high);
+    console.log("Low  :", latest.low);
+    console.log("Close:", latest.close); // ✅ recent price
 
-// console.log(open_de,':closed',close_de,':current')
-//   lastSavedOpenTime = closed[0];
+    // 🔹 Run Indicator
+    const results = Indicator.calculate(ohlcData);
+    if (!results?.length) return;
 
-//   const candle = {
-//     symbol: "BTCUSDT",
-//     timeframe: "1m",
-//     openTime: Number(closed[0]),
-//     open: +closed[1],
-//     high: +closed[2],
-//     low: +closed[3],
-//     close: +closed[4],
-//     volume: +closed[5],
-//     closeTime: Number(closed[6])
-//   };
+    const last = results[results.length - 1];
 
-//   await upsertCandle(candle);
-//   await trimOldCandles("BTCUSDT", "1m", 50);
-//   await analyzeMarket();
+    let signal = "NEUTRAL";
+    if (last.bullishSweep) signal = "BUY";
+    else if (last.bearishSweep) signal = "SELL";
 
+    if (signal === "NEUTRAL" && !last.cisd) {
+      console.log("⚪ No valid signal – skipped");
+      return;
+    }
 
+    const savedSignal = await SignalModel.create({
+      signal,
+      strength: last.strength || "MEDIUM",
+      price: latest.close, // ✅ recent candle close price
+      confidence: last.confidence ?? 0.7,
+      cisd: last.cisd,
+      cisdLevel: last.cisdLevel,
+      trend: last.trend,
+      bullishSweep: last.bullishSweep,
+      bearishSweep: last.bearishSweep,
+      swingHigh: last.swingHigh,
+      swingLow: last.swingLow
+    });
 
-// };
+    console.log("✅ Signal saved:", savedSignal._id);
 
-
-const disconnectBinance = () => {
-  if (pollingInterval) {
-    clearInterval(pollingInterval);
-    pollingInterval = null;
-    console.log("❌ Polling stopped");
+  } catch (err) {
+    console.error("❌ connectBinance error:", err.message);
   }
 };
 
 const getBufferStatus = () => {
   return {
     size: ohlcBuffer.length,
-    minRequired: indicator.len * 2 + 10,
-    ready: ohlcBuffer.length >= indicator.len * 2 + 10,
+    minRequired: Indicator.len * 2 + 10,
+    ready: ohlcBuffer.length >= Indicator.len * 2 + 10,
     firstCandle: ohlcBuffer[0]?.timestamp || null,
     lastCandle: ohlcBuffer[ohlcBuffer.length - 1]?.timestamp || null,
     lastCandleTime: lastCandleTime,
@@ -206,13 +107,12 @@ const calculateIndicator = () => {
     return { error: 'Not enough data', bufferStatus: getBufferStatus() };
   }
   
-  const results = indicator.calculate(ohlcBuffer);
+  const results = Indicator.calculate(ohlcBuffer);
   return results;
 };
 
 module.exports = { 
   connectBinance,
-  disconnectBinance,
   getBufferStatus, 
   calculateIndicator,
   ohlcBuffer,
