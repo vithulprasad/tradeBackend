@@ -9,7 +9,14 @@ const server = http.createServer(app);
 const { connectBinance, getBufferStatus, activeTrades } = require('./services/binance.ws');
 const cors = require('cors');
 const SignalDb = require('./models/Signal')
-app.use(cors());
+app.use(
+  cors({
+    // origin: "http://localhost:8080",
+    origin: "https://vidhultrade.netlify.app/",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    credentials: true, // if you use cookies / auth headers
+  })
+);
 
 // MongoDB connection
 const MONGODB_URL = process.env.MONGODB_URL;
@@ -59,13 +66,13 @@ app.get("/get_signal_details", async (req, res) => {
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
     const skip = (pageNum - 1) * limitNum;
-
+    console.log('get detais----',req.query)
     /* -------------------- FILTER OBJECT -------------------- */
     const filter = {};
 
     // BUY / SELL filter
     if (direction) {
-      filter.direction = direction.toUpperCase();
+      filter.signal = direction.toUpperCase();
     }
 
     // Date range filter
@@ -83,14 +90,14 @@ app.get("/get_signal_details", async (req, res) => {
 
     /* -------------------- QUERY -------------------- */
     const [signals, totalCount] = await Promise.all([
-      Signal.find(filter)
+      SignalDb.find(filter)
         .sort({ signalTime: -1 }) // 🔥 latest first
         .skip(skip)
         .limit(limitNum),
 
-      Signal.countDocuments(filter),
+      SignalDb.countDocuments(filter),
     ]);
-
+    console.log(signals,totalCount,'----------------')
     res.json({
       success: true,
       data: signals,
@@ -102,6 +109,7 @@ app.get("/get_signal_details", async (req, res) => {
       },
     });
   } catch (error) {
+    console.log(error.message)
     res.status(500).json({
       success: false,
       message: error.message,

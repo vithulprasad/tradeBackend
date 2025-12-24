@@ -19,7 +19,11 @@ const SignalSchema = new mongoose.Schema(
     bullishSweep: Boolean,
     bearishSweep: Boolean,
     swingHigh: Number,
-    swingLow: Number
+    swingLow: Number,
+    tradeId:{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Trade'
+    }
   },
   { timestamps: true }
 );
