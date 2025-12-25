@@ -33,13 +33,22 @@ const EnteringTrade = async () => {
     const entryPrice = latestSignal.price;
     const isBuy = latestSignal.signal === "BUY";
 
-    const target = isBuy
-      ? entryPrice * 1.007 // +0.7%
-      : entryPrice * 0.993; // -0.7%
+    // const target = isBuy
+    //   ? entryPrice * 1.007 // +0.7%
+    //   : entryPrice * 0.993; // -0.7%
 
-    const stopLoss = isBuy
-      ? entryPrice * 0.995 // -0.5%
-      : entryPrice * 1.005; // +0.5%
+    // const stopLoss = isBuy
+    //   ? entryPrice * 0.995 // -0.5%
+    //   : entryPrice * 1.005; // +0.5%
+
+    const target = isBuy
+    ? entryPrice * 1.004   // +0.40%
+    : entryPrice * 0.996;  // -0.40%
+
+  const stopLoss = isBuy
+    ? entryPrice * 0.9974  // -0.26%
+    : entryPrice * 1.0026; // +0.26%
+
 
     const trade = await TradeModel.create({
       entryPrice: +entryPrice.toFixed(2),
@@ -76,6 +85,7 @@ const UpdatingTrade = async (current_price) => {
     existingTrade.tradeStatus = "WINNER";
     existingTrade.profitLoss = 2;
     existingTrade.exitTime = new Date();
+    existingTrade.exitPrice = current_price;
 
     await existingTrade.save();
     return true;
@@ -87,7 +97,7 @@ const UpdatingTrade = async (current_price) => {
     existingTrade.tradeStatus = "LOSER";
     existingTrade.profitLoss = 1;
     existingTrade.exitTime = new Date();
-
+    existingTrade.exitPrice = current_price;
     await existingTrade.save();
     return true;
   }

@@ -8,15 +8,20 @@ const app = express();
 const server = http.createServer(app);
 const { connectBinance, getBufferStatus, activeTrades } = require('./services/binance.ws');
 const SignalDb = require('./models/Signal')
+
+const TradeDB = require('./models/Trade')
+
+// Middleware)
 const cors = require("cors");
 
 app.use(cors({
-  origin: ["https://vidhultrade.netlify.app"],
-  methods: ["GET", "POST", "PUT", "DELETE"],
+  origin: ["https://vidhultrade.netlify.app","http://localhost:8080"],
   credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE"],
 }));
 
-app.options("*", cors());
+app.use(express.json());
+
 
 
 // MongoDB connection
@@ -118,6 +123,69 @@ app.get("/get_signal_details", async (req, res) => {
   }
 });
 
+app.get("/get_trade_details", async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 10,
+      direction,
+      startDate,
+      endDate,
+    } = req.query;
+
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    /* -------------------- FILTER -------------------- */
+    const filter = {};
+
+    // BUY / SELL filter
+    if (direction) {
+      filter.direction = direction.toUpperCase();
+    }
+
+    // Date range filter (use entryTime OR createdAt)
+    if (startDate || endDate) {
+      filter.entryTime = {};
+
+      if (startDate) {
+        filter.entryTime.$gte = new Date(startDate);
+      }
+
+      if (endDate) {
+        filter.entryTime.$lte = new Date(endDate);
+      }
+    }
+
+    /* -------------------- QUERY -------------------- */
+    const [trades, totalCount] = await Promise.all([
+      TradeDB.find(filter)
+        .sort({ entryTime: -1 }) // latest first
+        .skip(skip)
+        .limit(limitNum),
+
+      TradeDB.countDocuments(filter),
+    ]);
+
+    res.json({
+      success: true,
+      data: trades,
+      pagination: {
+        totalRecords: totalCount,
+        totalPages: Math.ceil(totalCount / limitNum),
+        currentPage: pageNum,
+        limit: limitNum,
+      },
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
 
 
 
