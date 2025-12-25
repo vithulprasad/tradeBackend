@@ -9,7 +9,6 @@ const tradeSchema = new mongoose.Schema({
   },
   direction: {
     type: String,
-    enum: ['BUY', 'SELL'],
   },
   stopLoss: {
     type: Number

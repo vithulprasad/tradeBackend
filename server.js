@@ -12,7 +12,7 @@ const SignalDb = require('./models/Signal')
 app.use(
   cors({
     // origin: "http://localhost:8080",
-    origin: "https://vidhultrade.netlify.app/",
+    origin: "https://vidhultrade.netlify.app",
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     credentials: true, // if you use cookies / auth headers
   })
