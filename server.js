@@ -7,16 +7,17 @@ const axios = require('axios');
 const app = express();
 const server = http.createServer(app);
 const { connectBinance, getBufferStatus, activeTrades } = require('./services/binance.ws');
-const cors = require('cors');
 const SignalDb = require('./models/Signal')
-app.use(
-  cors({
-    // origin: "http://localhost:8080",
-    origin: "https://vidhultrade.netlify.app",
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    credentials: true, // if you use cookies / auth headers
-  })
-);
+const cors = require("cors");
+
+app.use(cors({
+  origin: ["https://vidhultrade.netlify.app"],
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  credentials: true,
+}));
+
+app.options("*", cors());
+
 
 // MongoDB connection
 const MONGODB_URL = process.env.MONGODB_URL;
