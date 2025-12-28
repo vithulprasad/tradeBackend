@@ -73,37 +73,50 @@ const EnteringTrade = async () => {
 };
 
 const UpdatingTrade = async (current_price) => {
-  const existingTrade = await TradeModel.findOne({
+  const trade = await TradeModel.findOne({
     currentStatus: "PENDING",
   });
 
-  if (!existingTrade) return;
+  if (!trade) return false;
 
-  if (current_price > existingTrade.target) {
-    existingTrade.tradedQuantity = 1;
-    existingTrade.currentStatus = "COMPLETED";
-    existingTrade.tradeStatus = "WINNER";
-    existingTrade.profitLoss = 2;
-    existingTrade.exitTime = new Date();
-    existingTrade.exitPrice = current_price;
+  // LONG trade logic
+  if (trade.direction === "LONG") {
+    if (current_price >= trade.target) {
+      await closeTrade(trade, "WINNER", current_price);
+      return true;
+    }
 
-    await existingTrade.save();
-    return true;
+    if (current_price <= trade.stopLoss) {
+      await closeTrade(trade, "LOSER", current_price);
+      return true;
+    }
   }
 
-  if (current_price < existingTrade.stopLoss) {
-    existingTrade.tradedQuantity = 1;
-    existingTrade.currentStatus = "COMPLETED";
-    existingTrade.tradeStatus = "LOSER";
-    existingTrade.profitLoss = 1;
-    existingTrade.exitTime = new Date();
-    existingTrade.exitPrice = current_price;
-    await existingTrade.save();
-    return true;
-  }
+  // SHORT trade logic
+  if (trade.direction === "SHORT") {
+    if (current_price <= trade.target) {
+      await closeTrade(trade, "WINNER", current_price);
+      return true;
+    }
 
+    if (current_price >= trade.stopLoss) {
+      await closeTrade(trade, "LOSER", current_price);
+      return true;
+    }
+  }
   return false;
 };
+  const closeTrade = async (trade, status, price) => {
+  trade.tradedQuantity = 1;
+  trade.currentStatus = "COMPLETED";
+  trade.tradeStatus = status;
+  trade.profitLoss = status === "WINNER" ? 2 : -1;
+  trade.exitTime = new Date();
+  trade.exitPrice = price;
+
+  await trade.save();
+};
+
 
 const connectBinance = async () => {
   try {
